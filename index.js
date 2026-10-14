@@ -100,43 +100,43 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadísticas generales del match
+            // Consultar estadísticas de la partida
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
                     { headers: { Authorization: `Bearer ${FACEIT_KEY}` } }
                 );
                 
-                const rounds = matchStatsRes.data.rounds;
-                if (rounds && rounds.length > 0) {
-                    for (const round of rounds) {
-                        const allPlayersInMatch = round.teams.flatMap(t => t.players || []);
-                        
-                        let playerKillsInMatch = 0;
-                        let playerDeathsInMatch = 0;
-                        let topKillsInMatch = 0;
+                const roundsData = matchStatsRes.data.rounds;
+                if (roundsData && roundsData.length > 0) {
+                    const matchSummary = roundsData[0];
+                    const allPlayers = matchSummary.teams.flatMap(t => t.players || []);
 
-                        for (const p of allPlayersInMatch) {
-                            const st = p.player_stats || {};
-                            const k = Number(st["Kills"] || st["kills"] || 0);
+                    let topKillsInMatch = 0;
+                    let targetKills = 0;
+                    let targetDeaths = 0;
 
-                            if (k > topKillsInMatch) {
-                                topKillsInMatch = k;
-                            }
+                    // Evaluamos todos los jugadores para encontrar el Top Frag/MVP del partido
+                    for (const p of allPlayers) {
+                        const k = Number(p.player_stats?.["Kills"] || 0);
+                        const d = Number(p.player_stats?.["Deaths"] || 0);
 
-                            if (p.player_id === playerId) {
-                                playerKillsInMatch = k;
-                                playerDeathsInMatch = Number(st["Deaths"] || st["deaths"] || 0);
-                            }
+                        if (k > topKillsInMatch) {
+                            topKillsInMatch = k;
                         }
 
-                        totalKills += playerKillsInMatch;
-                        totalDeaths += playerDeathsInMatch;
-
-                        // Es MVP de toda la partida si logró ser la jugadora con más asesinatos del match
-                        if (playerKillsInMatch > 0 && playerKillsInMatch === topKillsInMatch) {
-                            matchMvpCount++;
+                        if (p.player_id === playerId) {
+                            targetKills = k;
+                            targetDeaths = d;
                         }
+                    }
+
+                    totalKills += targetKills;
+                    totalDeaths += targetDeaths;
+
+                    // Si fue la jugadora con más kills del partido (MVP de la partida)
+                    if (targetKills > 0 && targetKills === topKillsInMatch) {
+                        matchMvpCount++;
                     }
                 }
             } catch (err) {
