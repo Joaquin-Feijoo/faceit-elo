@@ -55,7 +55,6 @@ async function getStats() {
     let losses = 0;
     let totalToday = 0;
 
-    // Acumuladores
     let totalKills = 0;
     let totalDeaths = 0;
     let matchMvpCount = 0;
@@ -113,29 +112,44 @@ async function getStats() {
                     for (const round of rounds) {
                         const playerStatsList = round.teams.flatMap(t => t.players);
                         
-                        // Obtenemos todos los jugadores con sus kills para ver quién fue el MVP/Top de la partida
-                        let topKillsInMatch = 0;
-                        let playerKills = 0;
-                        let playerDeaths = 0;
+                        let targetPlayerStats = null;
+                        let maxPlayerMvpsInMatch = 0;
+                        let playerMvpsInMatch = 0;
 
                         for (const p of playerStatsList) {
-                            const pKills = Number(p.player_stats?.["Kills"] || 0);
-                            if (pKills > topKillsInMatch) {
-                                topKillsInMatch = pKills;
+                            const pStats = p.player_stats || {};
+                            // Buscar conteo de MVPs en la partida
+                            const pMvps = Number(pStats["MVPs"] || pStats["mvps"] || pStats["Mvps"] || 0);
+                            
+                            if (pMvps > maxPlayerMvpsInMatch) {
+                                maxPlayerMvpsInMatch = pMvps;
                             }
 
-                            if (p.player_id === playerId && p.player_stats) {
-                                playerKills = pKills;
-                                playerDeaths = Number(p.player_stats["Deaths"] || 0);
+                            if (p.player_id === playerId) {
+                                targetPlayerStats = pStats;
+                                playerMvpsInMatch = pMvps;
                             }
                         }
 
-                        totalKills += playerKills;
-                        totalDeaths += playerDeaths;
+                        if (targetPlayerStats) {
+                            const k = Number(targetPlayerStats["Kills"] || targetPlayerStats["kills"] || 0);
+                            const d = Number(targetPlayerStats["Deaths"] || targetPlayerStats["deaths"] || 0);
+                            
+                            totalKills += k;
+                            totalDeaths += d;
 
-                        // Si fue el jugador con más kills/impacto de la partida (Top Frag / MVP)
-                        if (playerKills > 0 && playerKills === topKillsInMatch) {
-                            matchMvpCount++;
+                            // Comprobación de MVP de la partida:
+                            // 1. Si la API indica explícitamente la bandera de Match MVP
+                            // 2. O si el jugador fue el que más MVPs acumuló en la partida (y tuvo al menos 1)
+                            const isExplicitMvp = targetPlayerStats["Match MVP"] === "1" || 
+                                                  targetPlayerStats["match_mvp"] === "1" ||
+                                                  targetPlayerStats["MVP"] === "1";
+
+                            const isTopMvp = playerMvpsInMatch > 0 && playerMvpsInMatch >= maxPlayerMvpsInMatch;
+
+                            if (isExplicitMvp || isTopMvp) {
+                                matchMvpCount++;
+                            }
                         }
                     }
                 }
