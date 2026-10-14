@@ -57,7 +57,6 @@ async function getStats() {
 
     let totalKills = 0;
     let totalDeaths = 0;
-    let matchMvpCount = 0;
 
     while (true) {
 
@@ -100,7 +99,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Obtenemos estadísticas detalladas
+            // Consultar estadísticas de la partida
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -109,45 +108,14 @@ async function getStats() {
                 
                 const roundsData = matchStatsRes.data.rounds;
                 if (roundsData && roundsData.length > 0) {
-                    
-                    let isPlayerTopFrag = false;
-                    let pKills = 0;
-                    let pDeaths = 0;
+                    const allPlayers = roundsData[0].teams.flatMap(t => t.players || []);
 
-                    for (const r of roundsData) {
-                        const teams = r.teams || [];
-                        let maxKillsInRound = 0;
-                        let myKillsInRound = 0;
-
-                        for (const t of teams) {
-                            const players = t.players || [];
-                            for (const p of players) {
-                                const st = p.player_stats || {};
-                                const k = Number(st["Kills"] || st["kills"] || 0);
-                                const d = Number(st["Deaths"] || st["deaths"] || 0);
-
-                                if (k > maxKillsInRound) {
-                                    maxKillsInRound = k;
-                                }
-
-                                if (p.player_id === playerId) {
-                                    myKillsInRound = k;
-                                    pKills = k;
-                                    pDeaths = d;
-                                }
-                            }
+                    for (const p of allPlayers) {
+                        if (p.player_id === playerId) {
+                            const st = p.player_stats || {};
+                            totalKills += Number(st["Kills"] || st["kills"] || 0);
+                            totalDeaths += Number(st["Deaths"] || st["deaths"] || 0);
                         }
-
-                        if (myKillsInRound > 0 && myKillsInRound >= maxKillsInRound) {
-                            isPlayerTopFrag = true;
-                        }
-                    }
-
-                    totalKills += pKills;
-                    totalDeaths += pDeaths;
-
-                    if (isPlayerTopFrag) {
-                        matchMvpCount++;
                     }
                 }
             } catch (err) {
@@ -169,8 +137,7 @@ async function getStats() {
         wins,
         losses,
         winrate: total ? Math.round((wins / total) * 100) : 0,
-        kd: kdRatio,
-        mvps: matchMvpCount
+        kd: kdRatio
     };
 }
 
@@ -206,8 +173,7 @@ function buildMessage(stats) {
         .replaceAll("{wins}", stats.wins)
         .replaceAll("{losses}", stats.losses)
         .replaceAll("{wr}", stats.winrate)
-        .replaceAll("{kd}", stats.kd)
-        .replaceAll("{mvps}", stats.mvps);
+        .replaceAll("{kd}", stats.kd);
 }
 
 app.get("/elo", async (req, res) => {
