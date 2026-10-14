@@ -55,10 +55,10 @@ async function getStats() {
     let losses = 0;
     let totalToday = 0;
 
-    // Acumuladores de K/D y MVPs
+    // Acumuladores de K/D y partidas en las que fue MVP
     let totalKills = 0;
     let totalDeaths = 0;
-    let totalMvp = 0;
+    let mvpMatchesCount = 0;
 
     while (true) {
 
@@ -101,7 +101,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadisticas detalladas del match para K/D y MVPs
+            // Consultar estadisticas detalladas del match
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -110,16 +110,33 @@ async function getStats() {
                 
                 const rounds = matchStatsRes.data.rounds;
                 if (rounds && rounds.length > 0) {
+                    let matchMvps = 0;
+                    let matchKills = 0;
+                    let matchDeaths = 0;
+
                     for (const round of rounds) {
                         const playerStatsList = round.teams.flatMap(t => t.players);
                         const pStats = playerStatsList.find(p => p.player_id === playerId);
                         
                         if (pStats && pStats.player_stats) {
                             const stats = pStats.player_stats;
-                            totalKills += Number(stats["Kills"] || 0);
-                            totalDeaths += Number(stats["Deaths"] || 0);
-                            totalMvp += Number(stats["MVPs"] || 0);
+                            const k = Number(stats["Kills"] || 0);
+                            const d = Number(stats["Deaths"] || 0);
+                            const m = Number(stats["MVPs"] || 0);
+
+                            matchKills += k;
+                            matchDeaths += d;
+                            matchMvps += m;
                         }
+                    }
+
+                    totalKills += matchKills;
+                    totalDeaths += matchDeaths;
+
+                    // Si en la partida acumulaste el mayor numero de MVPs o tuviste participacion destacada (>2 MVPs de ronda)
+                    // lo cuenta como 1 partida siendo MVP / jugador destacado.
+                    if (matchMvps >= 2) {
+                        mvpMatchesCount++;
                     }
                 }
             } catch (err) {
@@ -142,7 +159,7 @@ async function getStats() {
         losses,
         winrate: total ? Math.round((wins / total) * 100) : 0,
         kd: kdRatio,
-        mvps: totalMvp
+        mvps: mvpMatchesCount
     };
 }
 
