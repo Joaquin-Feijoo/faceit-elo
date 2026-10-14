@@ -55,6 +55,11 @@ async function getStats() {
     let losses = 0;
     let totalToday = 0;
 
+    // Acumuladores de K/D y MVPs
+    let totalKills = 0;
+    let totalDeaths = 0;
+    let totalMvp = 0;
+
     while (true) {
 
         const historyRes = await axios.get(
@@ -95,6 +100,31 @@ async function getStats() {
 
             if (playerFaction === winner) wins++;
             else losses++;
+
+            // Consultar estadisticas detalladas del match para K/D y MVPs
+            try {
+                const matchStatsRes = await axios.get(
+                    `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
+                    { headers: { Authorization: `Bearer ${FACEIT_KEY}` } }
+                );
+                
+                const rounds = matchStatsRes.data.rounds;
+                if (rounds && rounds.length > 0) {
+                    for (const round of rounds) {
+                        const playerStatsList = round.teams.flatMap(t => t.players);
+                        const pStats = playerStatsList.find(p => p.player_id === playerId);
+                        
+                        if (pStats && pStats.player_stats) {
+                            const stats = pStats.player_stats;
+                            totalKills += Number(stats["Kills"] || 0);
+                            totalDeaths += Number(stats["Deaths"] || 0);
+                            totalMvp += Number(stats["MVPs"] || 0);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("No se pudieron obtener stats del match:", match.match_id);
+            }
         }
 
         if (foundOlderMatch) break;
@@ -103,13 +133,16 @@ async function getStats() {
     }
 
     const total = wins + losses;
+    const kdRatio = totalDeaths > 0 ? (totalKills / totalDeaths).toFixed(2) : totalKills.toFixed(2);
 
     return {
         elo,
         matches_today: totalToday,
         wins,
         losses,
-        winrate: total ? Math.round((wins / total) * 100) : 0
+        winrate: total ? Math.round((wins / total) * 100) : 0,
+        kd: kdRatio,
+        mvps: totalMvp
     };
 }
 
@@ -144,7 +177,9 @@ function buildMessage(stats) {
         .replaceAll("{matches}", stats.matches_today)
         .replaceAll("{wins}", stats.wins)
         .replaceAll("{losses}", stats.losses)
-        .replaceAll("{wr}", stats.winrate);
+        .replaceAll("{wr}", stats.winrate)
+        .replaceAll("{kd}", stats.kd)
+        .replaceAll("{mvps}", stats.mvps);
 }
 
 app.get("/elo", async (req, res) => {
