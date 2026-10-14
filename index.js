@@ -100,7 +100,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadísticas de la partida
+            // Obtenemos estadísticas detalladas
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -109,33 +109,44 @@ async function getStats() {
                 
                 const roundsData = matchStatsRes.data.rounds;
                 if (roundsData && roundsData.length > 0) {
-                    const matchSummary = roundsData[0];
-                    const allPlayers = matchSummary.teams.flatMap(t => t.players || []);
+                    
+                    let isPlayerTopFrag = false;
+                    let pKills = 0;
+                    let pDeaths = 0;
 
-                    let topKillsInMatch = 0;
-                    let targetKills = 0;
-                    let targetDeaths = 0;
+                    for (const r of roundsData) {
+                        const teams = r.teams || [];
+                        let maxKillsInRound = 0;
+                        let myKillsInRound = 0;
 
-                    // Evaluamos todos los jugadores para encontrar el Top Frag/MVP del partido
-                    for (const p of allPlayers) {
-                        const k = Number(p.player_stats?.["Kills"] || 0);
-                        const d = Number(p.player_stats?.["Deaths"] || 0);
+                        for (const t of teams) {
+                            const players = t.players || [];
+                            for (const p of players) {
+                                const st = p.player_stats || {};
+                                const k = Number(st["Kills"] || st["kills"] || 0);
+                                const d = Number(st["Deaths"] || st["deaths"] || 0);
 
-                        if (k > topKillsInMatch) {
-                            topKillsInMatch = k;
+                                if (k > maxKillsInRound) {
+                                    maxKillsInRound = k;
+                                }
+
+                                if (p.player_id === playerId) {
+                                    myKillsInRound = k;
+                                    pKills = k;
+                                    pDeaths = d;
+                                }
+                            }
                         }
 
-                        if (p.player_id === playerId) {
-                            targetKills = k;
-                            targetDeaths = d;
+                        if (myKillsInRound > 0 && myKillsInRound >= maxKillsInRound) {
+                            isPlayerTopFrag = true;
                         }
                     }
 
-                    totalKills += targetKills;
-                    totalDeaths += targetDeaths;
+                    totalKills += pKills;
+                    totalDeaths += pDeaths;
 
-                    // Si fue la jugadora con más kills del partido (MVP de la partida)
-                    if (targetKills > 0 && targetKills === topKillsInMatch) {
+                    if (isPlayerTopFrag) {
                         matchMvpCount++;
                     }
                 }
