@@ -101,7 +101,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadisticas de la partida
+            // Consultar estadísticas de la partida
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -110,29 +110,33 @@ async function getStats() {
                 
                 const rounds = matchStatsRes.data.rounds;
                 if (rounds && rounds.length > 0) {
-                    let isMatchMvp = false;
-
                     for (const round of rounds) {
                         const playerStatsList = round.teams.flatMap(t => t.players);
-                        const pStats = playerStatsList.find(p => p.player_id === playerId);
                         
-                        if (pStats && pStats.player_stats) {
-                            const stats = pStats.player_stats;
-                            
-                            // Acumular Kills y Deaths
-                            totalKills += Number(stats["Kills"] || 0);
-                            totalDeaths += Number(stats["Deaths"] || 0);
+                        // Obtenemos todos los jugadores con sus kills para ver quién fue el MVP/Top de la partida
+                        let topKillsInMatch = 0;
+                        let playerKills = 0;
+                        let playerDeaths = 0;
 
-                            // Verificar si FACEIT le otorgo la estrella/insignia de MVP de la partida
-                            const matchMvpVal = stats["match_mvp"] || stats["Match MVP"] || stats["mvp"] || stats["MVP"];
-                            if (matchMvpVal === "1" || matchMvpVal === 1 || matchMvpVal === true || matchMvpVal === "true") {
-                                isMatchMvp = true;
+                        for (const p of playerStatsList) {
+                            const pKills = Number(p.player_stats?.["Kills"] || 0);
+                            if (pKills > topKillsInMatch) {
+                                topKillsInMatch = pKills;
+                            }
+
+                            if (p.player_id === playerId && p.player_stats) {
+                                playerKills = pKills;
+                                playerDeaths = Number(p.player_stats["Deaths"] || 0);
                             }
                         }
-                    }
 
-                    if (isMatchMvp) {
-                        matchMvpCount++;
+                        totalKills += playerKills;
+                        totalDeaths += playerDeaths;
+
+                        // Si fue el jugador con más kills/impacto de la partida (Top Frag / MVP)
+                        if (playerKills > 0 && playerKills === topKillsInMatch) {
+                            matchMvpCount++;
+                        }
                     }
                 }
             } catch (err) {
