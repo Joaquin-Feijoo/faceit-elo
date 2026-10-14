@@ -55,10 +55,10 @@ async function getStats() {
     let losses = 0;
     let totalToday = 0;
 
-    // Acumuladores de K/D y partidas en las que fue MVP
+    // Acumuladores
     let totalKills = 0;
     let totalDeaths = 0;
-    let mvpMatchesCount = 0;
+    let matchMvpCount = 0;
 
     while (true) {
 
@@ -101,7 +101,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadisticas detalladas del match
+            // Consultar estadisticas de la partida
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -110,9 +110,7 @@ async function getStats() {
                 
                 const rounds = matchStatsRes.data.rounds;
                 if (rounds && rounds.length > 0) {
-                    let matchMvps = 0;
-                    let matchKills = 0;
-                    let matchDeaths = 0;
+                    let isMatchMvp = false;
 
                     for (const round of rounds) {
                         const playerStatsList = round.teams.flatMap(t => t.players);
@@ -120,23 +118,21 @@ async function getStats() {
                         
                         if (pStats && pStats.player_stats) {
                             const stats = pStats.player_stats;
-                            const k = Number(stats["Kills"] || 0);
-                            const d = Number(stats["Deaths"] || 0);
-                            const m = Number(stats["MVPs"] || 0);
+                            
+                            // Acumular Kills y Deaths
+                            totalKills += Number(stats["Kills"] || 0);
+                            totalDeaths += Number(stats["Deaths"] || 0);
 
-                            matchKills += k;
-                            matchDeaths += d;
-                            matchMvps += m;
+                            // Verificar si FACEIT le otorgo la estrella/insignia de MVP de la partida
+                            const matchMvpVal = stats["match_mvp"] || stats["Match MVP"] || stats["mvp"] || stats["MVP"];
+                            if (matchMvpVal === "1" || matchMvpVal === 1 || matchMvpVal === true || matchMvpVal === "true") {
+                                isMatchMvp = true;
+                            }
                         }
                     }
 
-                    totalKills += matchKills;
-                    totalDeaths += matchDeaths;
-
-                    // Si en la partida acumulaste el mayor numero de MVPs o tuviste participacion destacada (>2 MVPs de ronda)
-                    // lo cuenta como 1 partida siendo MVP / jugador destacado.
-                    if (matchMvps >= 2) {
-                        mvpMatchesCount++;
+                    if (isMatchMvp) {
+                        matchMvpCount++;
                     }
                 }
             } catch (err) {
@@ -159,7 +155,7 @@ async function getStats() {
         losses,
         winrate: total ? Math.round((wins / total) * 100) : 0,
         kd: kdRatio,
-        mvps: mvpMatchesCount
+        mvps: matchMvpCount
     };
 }
 
