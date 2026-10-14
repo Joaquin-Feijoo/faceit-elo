@@ -100,7 +100,7 @@ async function getStats() {
             if (playerFaction === winner) wins++;
             else losses++;
 
-            // Consultar estadísticas de la partida
+            // Consultar estadísticas generales del match
             try {
                 const matchStatsRes = await axios.get(
                     `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -110,46 +110,32 @@ async function getStats() {
                 const rounds = matchStatsRes.data.rounds;
                 if (rounds && rounds.length > 0) {
                     for (const round of rounds) {
-                        const playerStatsList = round.teams.flatMap(t => t.players);
+                        const allPlayersInMatch = round.teams.flatMap(t => t.players || []);
                         
-                        let targetPlayerStats = null;
-                        let maxPlayerMvpsInMatch = 0;
-                        let playerMvpsInMatch = 0;
+                        let playerKillsInMatch = 0;
+                        let playerDeathsInMatch = 0;
+                        let topKillsInMatch = 0;
 
-                        for (const p of playerStatsList) {
-                            const pStats = p.player_stats || {};
-                            // Buscar conteo de MVPs en la partida
-                            const pMvps = Number(pStats["MVPs"] || pStats["mvps"] || pStats["Mvps"] || 0);
-                            
-                            if (pMvps > maxPlayerMvpsInMatch) {
-                                maxPlayerMvpsInMatch = pMvps;
+                        for (const p of allPlayersInMatch) {
+                            const st = p.player_stats || {};
+                            const k = Number(st["Kills"] || st["kills"] || 0);
+
+                            if (k > topKillsInMatch) {
+                                topKillsInMatch = k;
                             }
 
                             if (p.player_id === playerId) {
-                                targetPlayerStats = pStats;
-                                playerMvpsInMatch = pMvps;
+                                playerKillsInMatch = k;
+                                playerDeathsInMatch = Number(st["Deaths"] || st["deaths"] || 0);
                             }
                         }
 
-                        if (targetPlayerStats) {
-                            const k = Number(targetPlayerStats["Kills"] || targetPlayerStats["kills"] || 0);
-                            const d = Number(targetPlayerStats["Deaths"] || targetPlayerStats["deaths"] || 0);
-                            
-                            totalKills += k;
-                            totalDeaths += d;
+                        totalKills += playerKillsInMatch;
+                        totalDeaths += playerDeathsInMatch;
 
-                            // Comprobación de MVP de la partida:
-                            // 1. Si la API indica explícitamente la bandera de Match MVP
-                            // 2. O si el jugador fue el que más MVPs acumuló en la partida (y tuvo al menos 1)
-                            const isExplicitMvp = targetPlayerStats["Match MVP"] === "1" || 
-                                                  targetPlayerStats["match_mvp"] === "1" ||
-                                                  targetPlayerStats["MVP"] === "1";
-
-                            const isTopMvp = playerMvpsInMatch > 0 && playerMvpsInMatch >= maxPlayerMvpsInMatch;
-
-                            if (isExplicitMvp || isTopMvp) {
-                                matchMvpCount++;
-                            }
+                        // Es MVP de toda la partida si logró ser la jugadora con más asesinatos del match
+                        if (playerKillsInMatch > 0 && playerKillsInMatch === topKillsInMatch) {
+                            matchMvpCount++;
                         }
                     }
                 }
