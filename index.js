@@ -202,6 +202,8 @@ async function getPremierStats() {
 
   const headers = {
     _leetify_key: LEETIFY_KEY,
+    Authorization: `Bearer ${LEETIFY_KEY}`,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
   };
 
   try {
@@ -212,11 +214,16 @@ async function getPremierStats() {
     );
     const data = profileRes.data;
 
-    const personaName = data.meta?.name || PLAYER_NICK || "Jugador";
+    const personaName =
+      data.meta?.name || data.username || PLAYER_NICK || "Jugador";
 
     // CS Rating de Premier
     const cs2Game = data.games?.find((g) => g.gameId === "cs2");
-    const csRating = cs2Game?.skillLevel || data.skillLevel || "Sin Rango";
+    const csRating =
+      cs2Game?.skillLevel ||
+      data.skillLevel ||
+      data.ranks?.find((r) => r.gameMode === "premier")?.skillLevel ||
+      "Sin Rango";
 
     // 2. Historial de partidas recientes
     let matches = [];
@@ -229,6 +236,7 @@ async function getPremierStats() {
     } catch (matchErr) {
       console.error(
         "No se pudieron cargar las partidas de Leetify:",
+        matchErr.response?.status,
         matchErr.message,
       );
     }
@@ -241,7 +249,9 @@ async function getPremierStats() {
 
     for (const match of matches) {
       const isPremier =
-        match.dataSource === "matchmaking" || match.gameMode === "premier";
+        match.dataSource === "matchmaking" ||
+        match.gameMode === "premier" ||
+        match.matchmakingType === "premier";
       if (!isPremier) continue;
 
       if (!isToday(match.gameFinishedAt)) break;
@@ -251,8 +261,8 @@ async function getPremierStats() {
       if (match.hasWon) wins++;
       else losses++;
 
-      totalKills += Number(match.ownStats?.kills || 0);
-      totalDeaths += Number(match.ownStats?.deaths || 0);
+      totalKills += Number(match.ownStats?.kills || match.kills || 0);
+      totalDeaths += Number(match.ownStats?.deaths || match.deaths || 0);
     }
 
     const total = wins + losses;
@@ -272,7 +282,8 @@ async function getPremierStats() {
     };
   } catch (err) {
     console.error(
-      "Error consultando la API Oficial de Leetify:",
+      "Error detallado en Leetify API:",
+      err.response?.status,
       err.response?.data || err.message,
     );
     return {
