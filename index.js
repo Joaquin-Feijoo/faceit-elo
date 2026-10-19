@@ -6,7 +6,7 @@ const app = express();
 // Variables de entorno para FACEIT
 const FACEIT_KEY = process.env.FACEIT_KEY;
 const PLAYER_NICK = process.env.FACEIT_NICK;
-const ELO_MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
+const MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
 
 // Variables de entorno para PREMIER (ScraperAPI + CSStats)
 const STEAM_ID_64 = process.env.STEAM_ID_64;
@@ -15,7 +15,7 @@ const PREMIER_MESSAGE_TEMPLATE =
   process.env.PREMIER_MESSAGE ||
   "{nick} - ELO: {elo} | Today: {matches} {wins}W - {losses}L - WR: ({wr}%) | K/D today: {kd}";
 
-const CACHE_TIME = 90000; // 90 segundos
+const CACHE_TIME = 90000;
 
 // Cache Faceit
 let cacheFaceit = null;
@@ -33,10 +33,7 @@ if (!FACEIT_KEY || !PLAYER_NICK) {
 }
 
 function isToday(timestamp) {
-  const matchDate =
-    typeof timestamp === "number"
-      ? new Date(timestamp * 1000)
-      : new Date(timestamp);
+  const matchDate = new Date(timestamp * 1000);
   const now = new Date();
 
   return (
@@ -54,7 +51,9 @@ async function getStats() {
 
   const playerRes = await axios.get(
     `https://open.faceit.com/data/v4/players?nickname=${PLAYER_NICK}`,
-    { headers: { Authorization: `Bearer ${FACEIT_KEY}` } },
+    {
+      headers: { Authorization: `Bearer ${FACEIT_KEY}` },
+    },
   );
 
   const playerData = playerRes.data;
@@ -71,16 +70,20 @@ async function getStats() {
   let wins = 0;
   let losses = 0;
   let totalToday = 0;
+
   let totalKills = 0;
   let totalDeaths = 0;
 
   while (true) {
     const historyRes = await axios.get(
       `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=${limit}&offset=${offset}`,
-      { headers: { Authorization: `Bearer ${FACEIT_KEY}` } },
+      {
+        headers: { Authorization: `Bearer ${FACEIT_KEY}` },
+      },
     );
 
     const matches = historyRes.data.items;
+
     if (!matches.length) break;
 
     let foundOlderMatch = false;
@@ -110,6 +113,7 @@ async function getStats() {
       if (playerFaction === winner) wins++;
       else losses++;
 
+      // Consultar estadísticas de la partida
       try {
         const matchStatsRes = await axios.get(
           `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -139,6 +143,7 @@ async function getStats() {
     }
 
     if (foundOlderMatch) break;
+
     offset += limit;
   }
 
@@ -188,88 +193,109 @@ async function getPremierStats() {
   console.log("Fetching PREMIER stats vía ScraperAPI...");
 
   if (!STEAM_ID_64 || !SCRAPER_KEY) {
-    throw new Error("Faltan variables de entorno STEAM_ID_64 o SCRAPER_KEY");
+    console.error("Faltan variables de entorno STEAM_ID_64 o SCRAPER_KEY");
+    return {
+      nick: PLAYER_NICK || "Jugador",
+      elo: "No configurado",
+      matches_today: 0,
+      wins: 0,
+      losses: 0,
+      winrate: 0,
+      kd: "0.00",
+    };
   }
 
-  const targetUrl = encodeURIComponent(
-    `https://csstats.gg/player/${STEAM_ID_64}`,
-  );
-  const scraperUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&url=${targetUrl}`;
-
-  let html;
   try {
+    const targetUrl = `https://csstats.gg/player/${STEAM_ID_64}`;
+    const scraperUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&url=${encodeURIComponent(targetUrl)}`;
+
     const response = await axios.get(scraperUrl);
-    html = response.data;
+    const html = response.data;
+
+    // Extraer Nickname de forma segura
+    const nickMatch =
+      html.match(/<span id="player-name">([^<]+)<\/span>/i) ||
+      html.match(/<title>CS2 Stats - ([^<]+) - CSStats<\/title>/i);
+    const personaName = nickMatch
+      ? nickMatch[1].trim()
+      : PLAYER_NICK || "Jugador";
+
+    // Extraer Rating de Premier
+    const ratingMatch =
+      html.match(/class="ranks-rating">([0-9,]+)<\/div>/i) ||
+      html.match(/CS Rating[:\s]*([0-9,]+)/i);
+    const csRating = ratingMatch
+      ? ratingMatch[1].replace(/,/g, "")
+      : "Sin Rango";
+
+    let wins = 0;
+    let losses = 0;
+    let totalToday = 0;
+    let totalKills = 0;
+    let totalDeaths = 0;
+
+    const matchRowRegex =
+      /<tr class="match-row[^">]*data-timestamp="(\d+)"[\s\S]*?<\/tr>/g;
+    let match;
+
+    while ((match = matchRowRegex.exec(html)) !== null) {
+      const timestamp = parseInt(match[1]);
+
+      if (!isToday(timestamp)) break;
+
+      const rowHtml = match[0];
+
+      if (
+        !rowHtml.includes("Competitive Premier") &&
+        !rowHtml.includes("premier")
+      )
+        continue;
+
+      totalToday++;
+
+      if (rowHtml.includes("match-won") || rowHtml.includes("outcome-win")) {
+        wins++;
+      } else {
+        losses++;
+      }
+
+      const kdMatch = rowHtml.match(/(\d+)\s*\/\s*(\d+)/);
+      if (kdMatch) {
+        totalKills += parseInt(kdMatch[1]);
+        totalDeaths += parseInt(kdMatch[2]);
+      }
+    }
+
+    const total = wins + losses;
+    const kdRatio =
+      totalDeaths > 0
+        ? (totalKills / totalDeaths).toFixed(2)
+        : totalKills.toFixed(2);
+
+    return {
+      nick: personaName,
+      elo: csRating,
+      matches_today: totalToday,
+      wins,
+      losses,
+      winrate: total ? Math.round((wins / total) * 100) : 0,
+      kd: kdRatio,
+    };
   } catch (err) {
-    console.error("Error al conectar con ScraperAPI:", err.message);
-    throw new Error("No se pudo obtener la información de Premier.");
+    console.error(
+      "Error detallado en ScraperAPI:",
+      err.response?.data || err.message,
+    );
+    return {
+      nick: PLAYER_NICK || "Jugador",
+      elo: "Error de lectura",
+      matches_today: 0,
+      wins: 0,
+      losses: 0,
+      winrate: 0,
+      kd: "0.00",
+    };
   }
-
-  // Extraer Nickname
-  const nickMatch =
-    html.match(/<span id="player-name">([^<]+)<\/span>/i) ||
-    html.match(/<title>CS2 Stats - ([^<]+) - CSStats<\/title>/i);
-  const personaName = nickMatch ? nickMatch[1].trim() : PLAYER_NICK;
-
-  // Extraer Rating de Premier
-  const ratingMatch =
-    html.match(/class="ranks-rating">([0-9,]+)<\/div>/i) ||
-    html.match(/CS Rating:\s*([0-9,]+)/i);
-  const csRating = ratingMatch ? ratingMatch[1].replace(/,/g, "") : "Sin Rango";
-
-  let wins = 0;
-  let losses = 0;
-  let totalToday = 0;
-  let totalKills = 0;
-  let totalDeaths = 0;
-
-  const matchRowRegex =
-    /<tr class="match-row[^">]*data-timestamp="(\d+)"[\s\S]*?<\/tr>/g;
-  let match;
-
-  while ((match = matchRowRegex.exec(html)) !== null) {
-    const timestamp = parseInt(match[1]);
-
-    if (!isToday(timestamp)) break;
-
-    const rowHtml = match[0];
-
-    if (
-      !rowHtml.includes("Competitive Premier") &&
-      !rowHtml.includes("premier")
-    )
-      continue;
-
-    totalToday++;
-
-    if (rowHtml.includes("match-won") || rowHtml.includes("outcome-win")) {
-      wins++;
-    } else {
-      losses++;
-    }
-
-    const kdMatch = rowHtml.match(/(\d+)\s*\/\s*(\d+)/);
-    if (kdMatch) {
-      totalKills += parseInt(kdMatch[1]);
-      totalDeaths += parseInt(kdMatch[2]);
-    }
-  }
-
-  const total = wins + losses;
-  const kdRatio =
-    totalDeaths > 0
-      ? (totalKills / totalDeaths).toFixed(2)
-      : totalKills.toFixed(2);
-
-  return {
-    nick: personaName,
-    elo: csRating,
-    matches_today: totalToday,
-    wins,
-    losses,
-    winrate: total ? Math.round((wins / total) * 100) : 0,
-    kd: kdRatio,
-  };
 }
 
 async function getCachedPremierStats() {
@@ -295,11 +321,11 @@ async function getCachedPremierStats() {
 }
 
 // ==========================================
-// CONSTRUCTOR DE MENSAJES
+// CONSTRUCTORES DE MENSAJES Y RUTAS
 // ==========================================
 function buildMessage(template, stats) {
   return template
-    .replaceAll("{nick}", stats.nick || PLAYER_NICK)
+    .replaceAll("{nick}", stats.nick)
     .replaceAll("{elo}", stats.elo)
     .replaceAll("{matches}", stats.matches_today)
     .replaceAll("{wins}", stats.wins)
@@ -308,22 +334,16 @@ function buildMessage(template, stats) {
     .replaceAll("{kd}", stats.kd);
 }
 
-// ==========================================
-// ENDPOINTS
-// ==========================================
-
-// Route FACEIT (Texto)
 app.get("/elo", async (req, res) => {
   try {
     const stats = await getCachedStats();
-    res.send(buildMessage(ELO_MESSAGE_TEMPLATE, stats));
+    res.send(buildMessage(MESSAGE_TEMPLATE, stats));
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Error obteniendo elo");
   }
 });
 
-// Route FACEIT (JSON)
 app.get("/stats", async (req, res) => {
   try {
     const stats = await getCachedStats();
@@ -333,7 +353,6 @@ app.get("/stats", async (req, res) => {
   }
 });
 
-// Route PREMIER (Texto)
 app.get("/premier", async (req, res) => {
   try {
     const stats = await getCachedPremierStats();
@@ -344,7 +363,6 @@ app.get("/premier", async (req, res) => {
   }
 });
 
-// Route PREMIER (JSON)
 app.get("/premier-stats", async (req, res) => {
   try {
     const stats = await getCachedPremierStats();
