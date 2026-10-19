@@ -8,11 +8,12 @@ const FACEIT_KEY = process.env.FACEIT_KEY;
 const PLAYER_NICK = process.env.FACEIT_NICK;
 const ELO_MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
 
-// Variables de entorno para PREMIER (CSStats)
+// Variables de entorno para PREMIER (ScraperAPI + CSStats)
 const STEAM_ID_64 = process.env.STEAM_ID_64;
+const SCRAPER_KEY = process.env.SCRAPER_KEY;
 const PREMIER_MESSAGE_TEMPLATE =
   process.env.PREMIER_MESSAGE ||
-  "{nick} - Rating: {elo} | Today: {matches} {wins}W - {losses}L - WR: ({wr}%) | K/D today: {kd}";
+  "{nick} - ELO: {elo} | Today: {matches} {wins}W - {losses}L - WR: ({wr}%) | K/D today: {kd}";
 
 const CACHE_TIME = 90000; // 90 segundos
 
@@ -27,7 +28,7 @@ let lastFetchPremier = 0;
 let fetchingPremier = null;
 
 if (!FACEIT_KEY || !PLAYER_NICK) {
-  console.error("Faltan variables de entorno para Faceit");
+  console.error("Faltan variables de entorno de Faceit");
   process.exit(1);
 }
 
@@ -181,32 +182,27 @@ async function getCachedStats() {
 }
 
 // ==========================================
-// LÓGICA PREMIER (CSSTATS.GG)
+// LÓGICA PREMIER (CSSTATS + SCRAPERAPI)
 // ==========================================
 async function getPremierStats() {
-  console.log("Fetching PREMIER stats desde CSStats...");
+  console.log("Fetching PREMIER stats vía ScraperAPI...");
 
-  if (!STEAM_ID_64) {
-    throw new Error(
-      "STEAM_ID_64 no está definida en las variables de entorno.",
-    );
+  if (!STEAM_ID_64 || !SCRAPER_KEY) {
+    throw new Error("Faltan variables de entorno STEAM_ID_64 o SCRAPER_KEY");
   }
 
-  const url = `https://csstats.gg/player/${STEAM_ID_64}`;
-
-  const headers = {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-  };
+  const targetUrl = encodeURIComponent(
+    `https://csstats.gg/player/${STEAM_ID_64}`,
+  );
+  const scraperUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&url=${targetUrl}`;
 
   let html;
   try {
-    const response = await axios.get(url, { headers });
+    const response = await axios.get(scraperUrl);
     html = response.data;
   } catch (err) {
-    console.error("Error al conectar con CSStats:", err.message);
-    throw new Error("No se pudo obtener la información de CSStats.");
+    console.error("Error al conectar con ScraperAPI:", err.message);
+    throw new Error("No se pudo obtener la información de Premier.");
   }
 
   // Extraer Nickname
@@ -215,13 +211,12 @@ async function getPremierStats() {
     html.match(/<title>CS2 Stats - ([^<]+) - CSStats<\/title>/i);
   const personaName = nickMatch ? nickMatch[1].trim() : PLAYER_NICK;
 
-  // Extraer Rating de Premier (CS Rating)
+  // Extraer Rating de Premier
   const ratingMatch =
     html.match(/class="ranks-rating">([0-9,]+)<\/div>/i) ||
     html.match(/CS Rating:\s*([0-9,]+)/i);
   const csRating = ratingMatch ? ratingMatch[1].replace(/,/g, "") : "Sin Rango";
 
-  // Extraer estadísticas del día
   let wins = 0;
   let losses = 0;
   let totalToday = 0;
@@ -321,7 +316,7 @@ function buildMessage(template, stats) {
 app.get("/elo", async (req, res) => {
   try {
     const stats = await getCachedStats();
-    res.send(buildMessage(ELO_MESSAGE_TEMPLATE || MESSAGE_TEMPLATE, stats));
+    res.send(buildMessage(ELO_MESSAGE_TEMPLATE, stats));
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Error obteniendo elo");
