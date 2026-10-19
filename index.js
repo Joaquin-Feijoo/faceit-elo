@@ -6,16 +6,16 @@ const app = express();
 // Variables de entorno para FACEIT
 const FACEIT_KEY = process.env.FACEIT_KEY;
 const PLAYER_NICK = process.env.FACEIT_NICK;
-const MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
+const ELO_MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
 
-// Variables de entorno para PREMIER (ScraperAPI + CSStats)
+// Variables de entorno para PREMIER (Leetify API Oficial)
 const STEAM_ID_64 = process.env.STEAM_ID_64;
-const SCRAPER_KEY = process.env.SCRAPER_KEY;
+const LEETIFY_KEY = process.env.LEETIFY_KEY;
 const PREMIER_MESSAGE_TEMPLATE =
   process.env.PREMIER_MESSAGE ||
   "{nick} - ELO: {elo} | Today: {matches} {wins}W - {losses}L - WR: ({wr}%) | K/D today: {kd}";
 
-const CACHE_TIME = 90000;
+const CACHE_TIME = 90000; // 90 segundos
 
 // Cache Faceit
 let cacheFaceit = null;
@@ -33,7 +33,10 @@ if (!FACEIT_KEY || !PLAYER_NICK) {
 }
 
 function isToday(timestamp) {
-  const matchDate = new Date(timestamp * 1000);
+  const matchDate =
+    typeof timestamp === "number"
+      ? new Date(timestamp * 1000)
+      : new Date(timestamp);
   const now = new Date();
 
   return (
@@ -51,9 +54,7 @@ async function getStats() {
 
   const playerRes = await axios.get(
     `https://open.faceit.com/data/v4/players?nickname=${PLAYER_NICK}`,
-    {
-      headers: { Authorization: `Bearer ${FACEIT_KEY}` },
-    },
+    { headers: { Authorization: `Bearer ${FACEIT_KEY}` } },
   );
 
   const playerData = playerRes.data;
@@ -70,20 +71,16 @@ async function getStats() {
   let wins = 0;
   let losses = 0;
   let totalToday = 0;
-
   let totalKills = 0;
   let totalDeaths = 0;
 
   while (true) {
     const historyRes = await axios.get(
       `https://open.faceit.com/data/v4/players/${playerId}/history?game=cs2&limit=${limit}&offset=${offset}`,
-      {
-        headers: { Authorization: `Bearer ${FACEIT_KEY}` },
-      },
+      { headers: { Authorization: `Bearer ${FACEIT_KEY}` } },
     );
 
     const matches = historyRes.data.items;
-
     if (!matches.length) break;
 
     let foundOlderMatch = false;
@@ -113,7 +110,6 @@ async function getStats() {
       if (playerFaction === winner) wins++;
       else losses++;
 
-      // Consultar estadísticas de la partida
       try {
         const matchStatsRes = await axios.get(
           `https://open.faceit.com/data/v4/matches/${match.match_id}/stats`,
@@ -136,14 +132,13 @@ async function getStats() {
         }
       } catch (err) {
         console.error(
-          "No se pudieron obtener stats del match:",
+          "No se pudieron obtener stats del match de Faceit:",
           match.match_id,
         );
       }
     }
 
     if (foundOlderMatch) break;
-
     offset += limit;
   }
 
@@ -187,16 +182,16 @@ async function getCachedStats() {
 }
 
 // ==========================================
-// LÓGICA PREMIER (CSSTATS + SCRAPERAPI)
+// LÓGICA PREMIER (LEETIFY API OFICIAL)
 // ==========================================
 async function getPremierStats() {
-  console.log("Fetching PREMIER stats vía ScraperAPI...");
+  console.log("Fetching PREMIER stats desde Leetify API Oficial...");
 
-  if (!STEAM_ID_64 || !SCRAPER_KEY) {
-    console.error("Faltan variables de entorno STEAM_ID_64 o SCRAPER_KEY");
+  if (!STEAM_ID_64 || !LEETIFY_KEY) {
+    console.error("Faltan variables de entorno STEAM_ID_64 o LEETIFY_KEY");
     return {
       nick: PLAYER_NICK || "Jugador",
-      elo: "No configurado",
+      elo: "Sin Key",
       matches_today: 0,
       wins: 0,
       losses: 0,
@@ -205,28 +200,38 @@ async function getPremierStats() {
     };
   }
 
+  const headers = {
+    _leetify_key: LEETIFY_KEY,
+  };
+
   try {
-    const targetUrl = `https://csstats.gg/player/${STEAM_ID_64}`;
-    const scraperUrl = `http://api.scraperapi.com?api_key=${SCRAPER_KEY}&url=${encodeURIComponent(targetUrl)}`;
+    // 1. Perfil del jugador
+    const profileRes = await axios.get(
+      `https://api.leetify.com/api/profile/${STEAM_ID_64}`,
+      { headers },
+    );
+    const data = profileRes.data;
 
-    const response = await axios.get(scraperUrl);
-    const html = response.data;
+    const personaName = data.meta?.name || PLAYER_NICK || "Jugador";
 
-    // Extraer Nickname de forma segura
-    const nickMatch =
-      html.match(/<span id="player-name">([^<]+)<\/span>/i) ||
-      html.match(/<title>CS2 Stats - ([^<]+) - CSStats<\/title>/i);
-    const personaName = nickMatch
-      ? nickMatch[1].trim()
-      : PLAYER_NICK || "Jugador";
+    // CS Rating de Premier
+    const cs2Game = data.games?.find((g) => g.gameId === "cs2");
+    const csRating = cs2Game?.skillLevel || data.skillLevel || "Sin Rango";
 
-    // Extraer Rating de Premier
-    const ratingMatch =
-      html.match(/class="ranks-rating">([0-9,]+)<\/div>/i) ||
-      html.match(/CS Rating[:\s]*([0-9,]+)/i);
-    const csRating = ratingMatch
-      ? ratingMatch[1].replace(/,/g, "")
-      : "Sin Rango";
+    // 2. Historial de partidas recientes
+    let matches = [];
+    try {
+      const matchesRes = await axios.get(
+        `https://api.leetify.com/api/profile/${STEAM_ID_64}/matches`,
+        { headers },
+      );
+      matches = matchesRes.data || [];
+    } catch (matchErr) {
+      console.error(
+        "No se pudieron cargar las partidas de Leetify:",
+        matchErr.message,
+      );
+    }
 
     let wins = 0;
     let losses = 0;
@@ -234,36 +239,20 @@ async function getPremierStats() {
     let totalKills = 0;
     let totalDeaths = 0;
 
-    const matchRowRegex =
-      /<tr class="match-row[^">]*data-timestamp="(\d+)"[\s\S]*?<\/tr>/g;
-    let match;
+    for (const match of matches) {
+      const isPremier =
+        match.dataSource === "matchmaking" || match.gameMode === "premier";
+      if (!isPremier) continue;
 
-    while ((match = matchRowRegex.exec(html)) !== null) {
-      const timestamp = parseInt(match[1]);
-
-      if (!isToday(timestamp)) break;
-
-      const rowHtml = match[0];
-
-      if (
-        !rowHtml.includes("Competitive Premier") &&
-        !rowHtml.includes("premier")
-      )
-        continue;
+      if (!isToday(match.gameFinishedAt)) break;
 
       totalToday++;
 
-      if (rowHtml.includes("match-won") || rowHtml.includes("outcome-win")) {
-        wins++;
-      } else {
-        losses++;
-      }
+      if (match.hasWon) wins++;
+      else losses++;
 
-      const kdMatch = rowHtml.match(/(\d+)\s*\/\s*(\d+)/);
-      if (kdMatch) {
-        totalKills += parseInt(kdMatch[1]);
-        totalDeaths += parseInt(kdMatch[2]);
-      }
+      totalKills += Number(match.ownStats?.kills || 0);
+      totalDeaths += Number(match.ownStats?.deaths || 0);
     }
 
     const total = wins + losses;
@@ -283,12 +272,12 @@ async function getPremierStats() {
     };
   } catch (err) {
     console.error(
-      "Error detallado en ScraperAPI:",
+      "Error consultando la API Oficial de Leetify:",
       err.response?.data || err.message,
     );
     return {
       nick: PLAYER_NICK || "Jugador",
-      elo: "Error de lectura",
+      elo: "Error API",
       matches_today: 0,
       wins: 0,
       losses: 0,
@@ -334,10 +323,11 @@ function buildMessage(template, stats) {
     .replaceAll("{kd}", stats.kd);
 }
 
+// Endpoints FACEIT
 app.get("/elo", async (req, res) => {
   try {
     const stats = await getCachedStats();
-    res.send(buildMessage(MESSAGE_TEMPLATE, stats));
+    res.send(buildMessage(ELO_MESSAGE_TEMPLATE, stats));
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Error obteniendo elo");
@@ -353,6 +343,7 @@ app.get("/stats", async (req, res) => {
   }
 });
 
+// Endpoints PREMIER
 app.get("/premier", async (req, res) => {
   try {
     const stats = await getCachedPremierStats();
