@@ -3,16 +3,16 @@ const axios = require("axios");
 
 const app = express();
 
-// Variables para FACEIT
+// Variables de entorno para FACEIT
 const FACEIT_KEY = process.env.FACEIT_KEY;
 const PLAYER_NICK = process.env.FACEIT_NICK;
 const ELO_MESSAGE_TEMPLATE = process.env.ELO_MESSAGE;
 
-// Variables para PREMIER
+// Variables de entorno para PREMIER (CSStats)
 const STEAM_ID_64 = process.env.STEAM_ID_64;
 const PREMIER_MESSAGE_TEMPLATE =
   process.env.PREMIER_MESSAGE ||
-  "CS2 Premier | {nick} - Rating: {elo} | Hoy: {matches} partidas ({wins}W/{losses}L) - WR: {wr}% | K/D: {kd}";
+  "{nick} - Rating: {elo} | Today: {matches} {wins}W - {losses}L - WR: ({wr}%) | K/D today: {kd}";
 
 const CACHE_TIME = 90000; // 90 segundos
 
@@ -27,18 +27,15 @@ let lastFetchPremier = 0;
 let fetchingPremier = null;
 
 if (!FACEIT_KEY || !PLAYER_NICK) {
-  console.error(
-    "Faltan variables de entorno de Faceit (FACEIT_KEY o FACEIT_NICK)",
-  );
+  console.error("Faltan variables de entorno para Faceit");
   process.exit(1);
 }
 
-// Función auxiliar para comparar fechas (Día actual en UTC)
-function isToday(dateInput) {
+function isToday(timestamp) {
   const matchDate =
-    typeof dateInput === "number"
-      ? new Date(dateInput * 1000)
-      : new Date(dateInput);
+    typeof timestamp === "number"
+      ? new Date(timestamp * 1000)
+      : new Date(timestamp);
   const now = new Date();
 
   return (
@@ -51,7 +48,7 @@ function isToday(dateInput) {
 // ==========================================
 // LÓGICA FACEIT
 // ==========================================
-async function getFaceitStats() {
+async function getStats() {
   console.log("Fetching FACEIT stats...");
 
   const playerRes = await axios.get(
@@ -134,7 +131,7 @@ async function getFaceitStats() {
         }
       } catch (err) {
         console.error(
-          "No se pudieron obtener stats del match de Faceit:",
+          "No se pudieron obtener stats del match:",
           match.match_id,
         );
       }
@@ -161,12 +158,15 @@ async function getFaceitStats() {
   };
 }
 
-async function getCachedFaceitStats() {
+async function getCachedStats() {
   const now = Date.now();
-  if (cacheFaceit && now - lastFetchFaceit < CACHE_TIME) return cacheFaceit;
+
+  if (cacheFaceit && now - lastFetchFaceit < CACHE_TIME) {
+    return cacheFaceit;
+  }
 
   if (!fetchingFaceit) {
-    fetchingFaceit = getFaceitStats()
+    fetchingFaceit = getStats()
       .then((stats) => {
         cacheFaceit = stats;
         lastFetchFaceit = Date.now();
@@ -176,14 +176,15 @@ async function getCachedFaceitStats() {
         fetchingFaceit = null;
       });
   }
+
   return fetchingFaceit;
 }
 
 // ==========================================
-// LÓGICA PREMIER (LEETIFY API)
+// LÓGICA PREMIER (CSSTATS.GG)
 // ==========================================
 async function getPremierStats() {
-  console.log("Fetching PREMIER stats...");
+  console.log("Fetching PREMIER stats desde CSStats...");
 
   if (!STEAM_ID_64) {
     throw new Error(
@@ -191,46 +192,72 @@ async function getPremierStats() {
     );
   }
 
-  // Consulta de datos de perfil y partidas desde Leetify
-  const profileRes = await axios.get(
-    `https://api.leetify.com/api/profile/${STEAM_ID_64}`,
-  );
-  const profileData = profileRes.data;
+  const url = `https://csstats.gg/player/${STEAM_ID_64}`;
 
-  const personaName = profileData.meta?.name || PLAYER_NICK;
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+  };
 
-  // Extraer rating de Premier
-  const cs2Game = profileData.games?.find((g) => g.gameId === "cs2");
-  const csRating = cs2Game?.skillLevel || profileData.skillLevel || "Sin Rango";
+  let html;
+  try {
+    const response = await axios.get(url, { headers });
+    html = response.data;
+  } catch (err) {
+    console.error("Error al conectar con CSStats:", err.message);
+    throw new Error("No se pudo obtener la información de CSStats.");
+  }
 
-  // Obtener historial de partidas recientes
-  const matchesRes = await axios.get(
-    `https://api.leetify.com/api/profile/${STEAM_ID_64}/matches`,
-  );
-  const matches = matchesRes.data || [];
+  // Extraer Nickname
+  const nickMatch =
+    html.match(/<span id="player-name">([^<]+)<\/span>/i) ||
+    html.match(/<title>CS2 Stats - ([^<]+) - CSStats<\/title>/i);
+  const personaName = nickMatch ? nickMatch[1].trim() : PLAYER_NICK;
 
+  // Extraer Rating de Premier (CS Rating)
+  const ratingMatch =
+    html.match(/class="ranks-rating">([0-9,]+)<\/div>/i) ||
+    html.match(/CS Rating:\s*([0-9,]+)/i);
+  const csRating = ratingMatch ? ratingMatch[1].replace(/,/g, "") : "Sin Rango";
+
+  // Extraer estadísticas del día
   let wins = 0;
   let losses = 0;
   let totalToday = 0;
   let totalKills = 0;
   let totalDeaths = 0;
 
-  for (const match of matches) {
-    // Solo tomar partidas de Matchmaking Premier
-    if (match.dataSource !== "matchmaking" && match.gameMode !== "premier")
-      continue;
+  const matchRowRegex =
+    /<tr class="match-row[^">]*data-timestamp="(\d+)"[\s\S]*?<\/tr>/g;
+  let match;
 
-    if (!isToday(match.gameFinishedAt)) break; // Al estar ordenado por fecha, si la partida es vieja cortamos
+  while ((match = matchRowRegex.exec(html)) !== null) {
+    const timestamp = parseInt(match[1]);
+
+    if (!isToday(timestamp)) break;
+
+    const rowHtml = match[0];
+
+    if (
+      !rowHtml.includes("Competitive Premier") &&
+      !rowHtml.includes("premier")
+    )
+      continue;
 
     totalToday++;
 
-    // Chequear resultado de la partida
-    if (match.hasWon) wins++;
-    else losses++;
+    if (rowHtml.includes("match-won") || rowHtml.includes("outcome-win")) {
+      wins++;
+    } else {
+      losses++;
+    }
 
-    // Kills y Deaths
-    totalKills += Number(match.ownStats?.kills || 0);
-    totalDeaths += Number(match.ownStats?.deaths || 0);
+    const kdMatch = rowHtml.match(/(\d+)\s*\/\s*(\d+)/);
+    if (kdMatch) {
+      totalKills += parseInt(kdMatch[1]);
+      totalDeaths += parseInt(kdMatch[2]);
+    }
   }
 
   const total = wins + losses;
@@ -252,7 +279,10 @@ async function getPremierStats() {
 
 async function getCachedPremierStats() {
   const now = Date.now();
-  if (cachePremier && now - lastFetchPremier < CACHE_TIME) return cachePremier;
+
+  if (cachePremier && now - lastFetchPremier < CACHE_TIME) {
+    return cachePremier;
+  }
 
   if (!fetchingPremier) {
     fetchingPremier = getPremierStats()
@@ -265,6 +295,7 @@ async function getCachedPremierStats() {
         fetchingPremier = null;
       });
   }
+
   return fetchingPremier;
 }
 
@@ -273,7 +304,7 @@ async function getCachedPremierStats() {
 // ==========================================
 function buildMessage(template, stats) {
   return template
-    .replaceAll("{nick}", stats.nick)
+    .replaceAll("{nick}", stats.nick || PLAYER_NICK)
     .replaceAll("{elo}", stats.elo)
     .replaceAll("{matches}", stats.matches_today)
     .replaceAll("{wins}", stats.wins)
@@ -283,17 +314,27 @@ function buildMessage(template, stats) {
 }
 
 // ==========================================
-// RUTAS ENDPOINTS
+// ENDPOINTS
 // ==========================================
 
 // Route FACEIT (Texto)
 app.get("/elo", async (req, res) => {
   try {
-    const stats = await getCachedFaceitStats();
-    res.send(buildMessage(ELO_MESSAGE_TEMPLATE, stats));
+    const stats = await getCachedStats();
+    res.send(buildMessage(ELO_MESSAGE_TEMPLATE || MESSAGE_TEMPLATE, stats));
   } catch (err) {
-    console.error("Error en /elo:", err.message);
-    res.status(500).send("Error obteniendo elo de Faceit");
+    console.error(err.message);
+    res.status(500).send("Error obteniendo elo");
+  }
+});
+
+// Route FACEIT (JSON)
+app.get("/stats", async (req, res) => {
+  try {
+    const stats = await getCachedStats();
+    res.json(stats);
+  } catch {
+    res.status(500).json({ error: "Error obteniendo stats" });
   }
 });
 
@@ -303,22 +344,12 @@ app.get("/premier", async (req, res) => {
     const stats = await getCachedPremierStats();
     res.send(buildMessage(PREMIER_MESSAGE_TEMPLATE, stats));
   } catch (err) {
-    console.error("Error en /premier:", err.message);
+    console.error("Error en Premier:", err.message);
     res.status(500).send("Error obteniendo datos de Premier");
   }
 });
 
-// Route STATS FACEIT (JSON)
-app.get("/stats", async (req, res) => {
-  try {
-    const stats = await getCachedFaceitStats();
-    res.json(stats);
-  } catch {
-    res.status(500).json({ error: "Error obteniendo stats de Faceit" });
-  }
-});
-
-// Route STATS PREMIER (JSON)
+// Route PREMIER (JSON)
 app.get("/premier-stats", async (req, res) => {
   try {
     const stats = await getCachedPremierStats();
@@ -328,7 +359,6 @@ app.get("/premier-stats", async (req, res) => {
   }
 });
 
-// Servidor
 app.listen(process.env.PORT || 3000, () => {
   console.log("API corriendo en el puerto", process.env.PORT || 3000);
 });
